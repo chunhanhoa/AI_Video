@@ -2,8 +2,20 @@ import streamlit as st
 import os
 import sys
 import tempfile
+import numpy as np
+import cv2
+from PIL import Image
+import subprocess
 
 # Safer imports with error handling
+try:
+    import insightface
+    from insightface.app import FaceAnalysis
+    HAS_INSIGHTFACE = True
+except ImportError:
+    HAS_INSIGHTFACE = False
+    st.error("InsightFace not installed. Falling back to basic face detection.")
+
 try:
     import numpy as np
     import cv2
@@ -20,56 +32,45 @@ st.set_page_config(
     layout="wide"
 )
 
-# Add face swapping implementation using face landmarks and blending
-def swap_face(source_path, target_path, output_path):
-    try:
-        # Import insightface for face swapping
-        import insightface
-        from insightface.app import FaceAnalysis
-        
-        # Initialize face analyzer
-        app = FaceAnalysis(name="buffalo_l", providers=['CPUExecutionProvider'])
-        app.prepare(ctx_id=0, det_size=(640, 640))
-        
-        # Load source and target images
-        source_img = cv2.imread(source_path)
-        target_img = cv2.imread(target_path)
-        
-        if source_img is None or target_img is None:
-            st.error("Failed to load images")
-            return False
-            
-        # Get faces from source image
-        source_faces = app.get(source_img)
-        if len(source_faces) == 0:
-            st.error("No face found in source image")
-            return False
-            
-        # Get faces from target image
-        target_faces = app.get(target_img)
-        if len(target_faces) == 0:
-            st.error("No face found in target image")
-            return False
-        
-        # Since we're having issues with model download, use facial landmarks-based approach
-        st.info("Using face landmark-based blending for face swapping")
-        
-        # Advanced face swapping using face landmarks and blending
-        result = face_swap_using_landmarks(source_img, target_img, source_faces[0], target_faces)
-        
-        # Save the result
-        cv2.imwrite(output_path, result)
-        return True
-        
-    except Exception as e:
-        st.error(f"Face swap error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-        return False
+# Function to create a precise face mask
+def create_face_mask(img, landmarks, dilation=5):
+    # Create convex hull from landmarks
+    hull = cv2.convexHull(landmarks.astype(np.int32))
+    
+    # Create binary mask
+    mask = np.zeros(img.shape[:2], dtype=np.uint8)
+    cv2.fillConvexPoly(mask, hull, 255)
+    
+    # Dilate mask for smoother edges
+    kernel = np.ones((dilation, dilation), np.uint8)
+    mask = cv2.dilate(mask, kernel, iterations=1)
+    
+    # Feather edges with Gaussian blur
+    mask = cv2.GaussianBlur(mask, (15, 15), 0)
+    return mask / 255.0
 
-# Face swapping using face landmarks
+# Advanced color correction
+def color_correct_face(source_face, target_face, mask):
+    # Convert to LAB color space for better color matching
+    source_lab = cv2.cvtColor(source_face, cv2.COLOR_BGR2LAB)
+    target_lab = cv2.cvtColor(target_face, cv2.COLOR_BGR2LAB)
+    
+    # Calculate mean and std for each channel
+    for i in range(3):
+        if np.sum(mask) > 0:
+            mu_s = np.sum(source_lab[:, :, i] * mask) / np.sum(mask)
+            mu_t = np.sum(target_lab[:, :, i] * mask) / np.sum(mask)
+            std_s = np.sqrt(np.sum(((source_lab[:, :, i] - mu_s) * mask) ** 2) / np.sum(mask))
+            std_t = np.sqrt(np.sum(((target_lab[:, :, i] - mu_t) * mask) ** 2) / np.sum(mask))
+            
+            if std_s > 0:
+                source_lab[:, :, i] = ((source_lab[:, :, i] - mu_s) * (std_t / std_s)) + mu_t
+    
+    # Convert back to BGR
+    return cv2.cvtColor(source_lab, cv2.COLOR_LAB2BGR)
+
+# Face swapping using landmarks and improved blending
 def face_swap_using_landmarks(source_img, target_img, source_face, target_faces):
-    # Process each target face
     result = target_img.copy()
     
     for target_face in target_faces:
@@ -77,115 +78,49 @@ def face_swap_using_landmarks(source_img, target_img, source_face, target_faces)
         source_landmarks = source_face.landmark_2d_106
         target_landmarks = target_face.landmark_2d_106
         
-        # Get face bounding box with some margin
+        # Get bounding box with margin
         bbox = target_face.bbox.astype(np.int32)
         x1, y1, x2, y2 = bbox
         width = x2 - x1
         height = y2 - y1
-        
-        # Add margin
-        margin_x = int(width * 0.2)
-        margin_y = int(height * 0.2)
+        margin_x = int(width * 0.15)
+        margin_y = int(height * 0.15)
         x1 = max(0, x1 - margin_x)
         y1 = max(0, y1 - margin_y)
         x2 = min(target_img.shape[1], x2 + margin_x)
         y2 = min(target_img.shape[0], y2 + margin_y)
         
-        # Find convex hull of face landmarks
-        hull_points = cv2.convexHull(target_landmarks.astype(np.int32))
-        
-        # Create mask of the face
-        mask = np.zeros_like(target_img[:,:,0], dtype=np.uint8)
-        cv2.fillConvexPoly(mask, hull_points, 255)
-        
-        # Create a tight mask around eyes, nose, mouth for better blending
-        feature_mask = np.zeros_like(target_img[:,:,0], dtype=np.uint8)
-        
-        # Eyes, nose, mouth points (approximate indices for buffalo_l model)
-        left_eye_pts = target_landmarks[60:68].astype(np.int32)
-        right_eye_pts = target_landmarks[68:76].astype(np.int32)
-        nose_pts = target_landmarks[51:55].astype(np.int32)
-        mouth_pts = target_landmarks[76:88].astype(np.int32)
-        
-        # Fill features
-        cv2.fillConvexPoly(feature_mask, cv2.convexHull(left_eye_pts), 255)
-        cv2.fillConvexPoly(feature_mask, cv2.convexHull(right_eye_pts), 255)
-        cv2.fillConvexPoly(feature_mask, cv2.convexHull(nose_pts), 255)
-        cv2.fillConvexPoly(feature_mask, cv2.convexHull(mouth_pts), 255)
-        
-        # Dilate feature mask for better coverage
-        feature_mask = cv2.dilate(feature_mask, np.ones((5, 5), np.uint8), iterations=2)
+        # Create precise face mask
+        mask = create_face_mask(target_img, target_landmarks)
+        mask_3d = np.stack([mask] * 3, axis=2)
         
         # Estimate affine transformation
         tform = cv2.estimateAffinePartial2D(source_landmarks, target_landmarks, method=cv2.LMEDS)[0]
         
-        # Apply the transformation to the source image
+        # Warp source image
         warped = cv2.warpAffine(source_img, tform, (target_img.shape[1], target_img.shape[0]))
         
-        # Alpha blending masks
-        mask_3d = np.stack([mask] * 3, axis=2) / 255.0
-        feature_mask_3d = np.stack([feature_mask] * 3, axis=2) / 255.0
+        # Color correction
+        warped = color_correct_face(warped, target_img, mask)
         
-        # Create final blend mask with feathering
-        blend_mask = cv2.GaussianBlur(mask, (51, 51), 30) / 255.0
-        blend_mask = np.stack([blend_mask] * 3, axis=2)
+        # Blend with seamless cloning for natural look
+        center = ((x1 + x2) // 2, (y1 + y2) // 2)
+        try:
+            result = cv2.seamlessClone(warped, result, (mask * 255).astype(np.uint8), center, cv2.NORMAL_CLONE)
+        except:
+            # Fallback to alpha blending if seamless cloning fails
+            result = result * (1 - mask_3d) + warped * mask_3d
         
-        # Perform color correction to match skin tones
-        warped_face = warped * mask_3d
-        target_face_region = target_img * mask_3d
-        
-        # Simple color correction using mean and std
-        for i in range(3):  # For each color channel
-            if np.sum(mask) > 0:  # Avoid division by zero
-                mu_s = np.sum(warped_face[:,:,i]) / np.sum(mask_3d[:,:,i])
-                mu_t = np.sum(target_face_region[:,:,i]) / np.sum(mask_3d[:,:,i])
-                
-                std_s = np.sqrt(np.sum(((warped_face[:,:,i] - mu_s) * mask_3d[:,:,i]) ** 2) / np.sum(mask_3d[:,:,i]))
-                std_t = np.sqrt(np.sum(((target_face_region[:,:,i] - mu_t) * mask_3d[:,:,i]) ** 2) / np.sum(mask_3d[:,:,i]))
-                
-                if std_s > 0:
-                    warped[:,:,i] = ((warped[:,:,i] - mu_s) * (std_t / std_s)) + mu_t
-        
-        # Create blended result
-        blended = target_img * (1 - blend_mask) + warped * blend_mask
-        
-        # Enhanced feature blending with feature mask
-        feature_blend = target_img * (1 - feature_mask_3d) + warped * feature_mask_3d
-        
-        # Combine feature blend with main blend
-        result = blended.copy()
-        result = np.where(feature_mask_3d > 0, feature_blend, result)
-        
-        # Apply some final filtering to make it look more natural
+        # Apply slight blur to blend edges
         face_region = result[y1:y2, x1:x2]
         face_region = cv2.GaussianBlur(face_region, (3, 3), 0)
         result[y1:y2, x1:x2] = face_region
     
     return result.astype(np.uint8)
 
-# Process video frames with the landmark-based approach
-def process_video(source_path, target_path, output_path):
+# Process video with improved handling
+def process_video(source_path, target_path, output_path, many_faces=False):
     try:
-        # Import dependencies
-        import cv2
-        import insightface
-        from insightface.app import FaceAnalysis
-        
-        # Process fewer frames for speed (e.g., every 3rd frame)
-        process_every_n_frames = 3
-        
-        # Use OpenCV for video processing
-        cap = cv2.VideoCapture(target_path)
-        if not cap.isOpened():
-            st.error("Failed to open video file")
-            return False
-            
-        # Get video properties
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
         # Initialize face analyzer
         app = FaceAnalysis(name="buffalo_l", providers=['CPUExecutionProvider'])
         app.prepare(ctx_id=0, det_size=(640, 640))
@@ -195,64 +130,65 @@ def process_video(source_path, target_path, output_path):
         source_faces = app.get(source_img)
         if len(source_faces) == 0:
             st.error("No face found in source image")
-            cap.release()
             return False
         source_face = source_faces[0]
         
-        # Set up video writer
+        # Open video
+        cap = cv2.VideoCapture(target_path)
+        if not cap.isOpened():
+            st.error("Failed to open video file")
+            return False
+        
+        # Get video properties
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Initialize video writer
         temp_output = os.path.join(os.path.dirname(output_path), "temp_output.mp4")
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(temp_output, fourcc, fps/process_every_n_frames, (width, height))
+        out = cv2.VideoWriter(temp_output, fourcc, fps, (width, height))
         
-        # Process frames
+        # Process all frames for smooth motion
         frame_idx = 0
-        last_processed_frame = None
-        
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             
-            # Only process every nth frame
-            if frame_idx % process_every_n_frames == 0:
-                # Detect faces
-                faces = app.get(frame)
-                
-                # Apply face swap if faces detected
-                if len(faces) > 0:
-                    frame = face_swap_using_landmarks(source_img, frame, source_face, 
-                                                    faces[:1] if not many_faces else faces)
-                
-                # Store this processed frame
-                last_processed_frame = frame.copy()
-            elif last_processed_frame is not None:
-                # Use the last processed frame for in-between frames
-                frame = last_processed_frame
+            # Detect faces
+            faces = app.get(frame)
             
-            # Write the frame
+            # Apply face swap if faces detected
+            if len(faces) > 0:
+                frame = face_swap_using_landmarks(
+                    source_img, frame, source_face, 
+                    faces[:1] if not many_faces else faces
+                )
+            
+            # Write frame
             out.write(frame)
             
             # Update progress
             frame_idx += 1
-            if frame_idx % 10 == 0:
-                progress = min(95, int(frame_idx / total_frames * 100))
-                yield progress
+            progress = min(95, int(frame_idx / total_frames * 100))
+            yield progress
         
-        # Release video resources
+        # Release resources
         cap.release()
         out.release()
         
-        # Convert video to web-compatible format
+        # Convert to web-compatible format with preserved FPS
         try:
-            import subprocess
             subprocess.run([
-                'ffmpeg', '-i', temp_output, 
+                'ffmpeg', '-i', temp_output,
                 '-c:v', 'libx264', '-preset', 'fast',
+                '-r', str(fps),  # Preserve original FPS
                 '-pix_fmt', 'yuv420p', output_path
             ], check=True, capture_output=True)
         except Exception as e:
             st.warning(f"Video conversion warning: {e}")
-            # If ffmpeg conversion fails, use the original output
             import shutil
             shutil.copy2(temp_output, output_path)
         
@@ -264,6 +200,7 @@ def process_video(source_path, target_path, output_path):
         st.code(traceback.format_exc())
         return False
 
+# Streamlit UI
 st.title("🎭 AI Face Swap")
 st.subheader("Upload a source face and a target image/video to swap faces")
 
@@ -296,15 +233,15 @@ with st.sidebar:
 
 # Process button
 if st.button("Start Face Swap", disabled=(source_file is None or target_file is None)):
-    if not HAS_DEPENDENCIES:
-        st.error("Required dependencies are missing. Cannot perform face swap.")
+    if not HAS_DEPENDENCIES or not HAS_INSIGHTFACE:
+        st.error("Required dependencies are missing. Please install insightface and other dependencies.")
     else:
         # Show progress
         progress_bar = st.progress(0)
         status_text = st.empty()
         status_text.text("Processing... Please wait")
         
-        # Create temporary directory for processing
+        # Create temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 # Save uploaded files
@@ -328,9 +265,9 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
                 if is_video:
                     status_text.text("Processing video... This may take several minutes")
                     
-                    # Process video frame by frame with progress updates
+                    # Process video with progress updates
                     success = False
-                    for progress in process_video(source_path, target_path, output_path):
+                    for progress in process_video(source_path, target_path, output_path, many_faces):
                         progress_bar.progress(progress)
                         status_text.text(f"Video processing: {progress}%")
                         if progress == 100:
@@ -386,7 +323,7 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
 st.markdown("---")
 st.caption("Created for educational purposes only")
 
-# System info in an expander
+# System info
 with st.expander("System Information"):
     st.write(f"Python version: {sys.version}")
     
@@ -397,9 +334,7 @@ with st.expander("System Information"):
     else:
         st.error("❌ Some dependencies are missing")
         
-    # Check for insightface
-    try:
-        import insightface
+    if HAS_INSIGHTFACE:
         st.success(f"✅ InsightFace version: {insightface.__version__}")
-    except ImportError:
+    else:
         st.error("❌ InsightFace not installed")
