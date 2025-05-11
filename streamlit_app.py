@@ -8,37 +8,57 @@ from PIL import Image
 import subprocess
 import torch
 
-# Safer imports with error handling
+# Set page config as the FIRST Streamlit command
+st.set_page_config(
+    page_title="AI Face Swap",
+    page_icon="🎭",
+    layout="wide"
+)
+
+# Safer imports with error handling (avoid st.* commands during imports)
 try:
     import insightface
     from insightface.app import FaceAnalysis
     HAS_INSIGHTFACE = True
 except ImportError:
     HAS_INSIGHTFACE = False
-    st.error("InsightFace not installed. Falling back to basic face detection.")
 
 try:
-    from simswap.models.fs_networks import SimSwapModel  # Giả định bạn đã cài SimSwap
-    HAS_SIMSWAP = True
+    # Replace with actual SimSwap import when installed
+    # from simswap.models.fs_networks import SimSwapModel
+    HAS_SIMSWAP = False  # Set to True once SimSwap is installed
 except ImportError:
     HAS_SIMSWAP = False
-    st.error("SimSwap not installed. Please install from https://github.com/neuralchen/SimSwap")
 
 try:
     import numpy as np
     import cv2
     from PIL import Image
     HAS_DEPENDENCIES = True
-except ImportError as e:
-    st.error(f"Missing dependency: {e}")
+except ImportError:
     HAS_DEPENDENCIES = False
 
-# Basic app setup
-st.set_page_config(
-    page_title="AI Face Swap",
-    page_icon="🎭",
-    layout="wide"
-)
+# Display dependency errors after set_page_config
+if not HAS_DEPENDENCIES:
+    st.error("Missing core dependencies: numpy, opencv-python, or pillow.")
+if not HAS_INSIGHTFACE:
+    st.error("InsightFace not installed. Falling back to basic face detection.")
+if not HAS_SIMSWAP:
+    st.error("SimSwap not installed. Please install from https://github.com/neuralchen/SimSwap")
+
+# Placeholder for SimSwap model (to be replaced with actual implementation)
+class SimSwapModel:
+    def __init__(self):
+        pass
+    def load_model(self, checkpoint_path):
+        st.warning("SimSwap model not implemented. Please install and configure SimSwap.")
+    def eval(self):
+        pass
+    def to(self, device):
+        pass
+    def __call__(self, source_tensor, target_tensor):
+        # Placeholder: return target_tensor as is
+        return target_tensor
 
 # Function to create a precise face mask
 def create_face_mask(img, landmarks, dilation=5):
@@ -64,7 +84,7 @@ def color_correct_face(source_face, target_face, mask):
                 source_lab[:, :, i] = ((source_lab[:, :, i] - mu_s) * (std_t / std_s)) + mu_t
     return cv2.cvtColor(source_lab, cv2.COLOR_LAB2BGR)
 
-# Face swapping using SimSwap
+# Face swapping using SimSwap (placeholder until SimSwap is installed)
 def face_swap_using_simswap(source_img, target_img, source_face, target_faces, simswap_model):
     result = target_img.copy()
     
@@ -120,20 +140,56 @@ def face_swap_using_simswap(source_img, target_img, source_face, target_faces, s
     
     return result.astype(np.uint8)
 
-# Process video with SimSwap
+# Fallback to landmark-based swapping if SimSwap is not available
+def face_swap_using_landmarks(source_img, target_img, source_face, target_faces):
+    result = target_img.copy()
+    
+    for target_face in target_faces:
+        source_landmarks = source_face.landmark_2d_106
+        target_landmarks = target_face.landmark_2d_106
+        
+        bbox = target_face.bbox.astype(np.int32)
+        x1, y1, x2, y2 = bbox
+        width = x2 - x1
+        height = y2 - y1
+        margin_x = int(width * 0.15)
+        margin_y = int(height * 0.15)
+        x1 = max(0, x1 - margin_x)
+        y1 = max(0, y1 - margin_y)
+        x2 = min(target_img.shape[1], x2 + margin_x)
+        y2 = min(target_img.shape[0], y2 + margin_y)
+        
+        mask = create_face_mask(target_img, target_landmarks)
+        mask_3d = np.stack([mask] * 3, axis=2)
+        
+        tform = cv2.estimateAffinePartial2D(source_landmarks, target_landmarks, method=cv2.LMEDS)[0]
+        warped = cv2.warpAffine(source_img, tform, (target_img.shape[1], target_img.shape[0]))
+        warped = color_correct_face(warped, target_img, mask)
+        
+        center = ((x1 + x2) // 2, (y1 + y2) // 2)
+        try:
+            result = cv2.seamlessClone(warped, result, (mask * 255).astype(np.uint8), center, cv2.NORMAL_CLONE)
+        except:
+            result = result * (1 - mask_3d) + warped * mask_3d
+        
+        face_region = result[y1:y2, x1:x2]
+        face_region = cv2.GaussianBlur(face_region, (3, 3), 0)
+        result[y1:y2, x1:x2] = face_region
+    
+    return result.astype(np.uint8)
+
+# Process video
 def process_video(source_path, target_path, output_path, many_faces=False):
     try:
-        # Initialize face analyzer
         app = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider' if torch.cuda.is_available() else 'CPUExecutionProvider'])
         app.prepare(ctx_id=0, det_size=(640, 640))
         
-        # Initialize SimSwap model
         simswap_model = SimSwapModel()
-        simswap_model.load_model(checkpoint_path="./SimSwap/checkpoints/simswap_256.pth")  # Adjust path
-        simswap_model.eval()
-        simswap_model.to(device)
+        if HAS_SIMSWAP:
+            simswap_model.load_model(checkpoint_path="./SimSwap/checkpoints/simswap_256.pth")
+            simswap_model.eval()
+            simswap_model.to(device)
         
-        # Read source image and detect face
         source_img = cv2.imread(source_path)
         source_faces = app.get(source_img)
         if len(source_faces) == 0:
@@ -141,53 +197,48 @@ def process_video(source_path, target_path, output_path, many_faces=False):
             return False
         source_face = source_faces[0]
         
-        # Open video
         cap = cv2.VideoCapture(target_path)
         if not cap.isOpened():
             st.error("Failed to open video file")
             return False
         
-        # Get video properties
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        # Initialize video writer
         temp_output = os.path.join(os.path.dirname(output_path), "temp_output.mp4")
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(temp_output, fourcc, fps, (width, height))
         
-        # Process all frames
         frame_idx = 0
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
             
-            # Detect faces
             faces = app.get(frame)
-            
-            # Apply face swap if faces detected
             if len(faces) > 0:
-                frame = face_swap_using_simswap(
-                    source_img, frame, source_face, 
-                    faces[:1] if not many_faces else faces, simswap_model
-                )
+                if HAS_SIMSWAP:
+                    frame = face_swap_using_simswap(
+                        source_img, frame, source_face, 
+                        faces[:1] if not many_faces else faces, simswap_model
+                    )
+                else:
+                    frame = face_swap_using_landmarks(
+                        source_img, frame, source_face, 
+                        faces[:1] if not many_faces else faces
+                    )
             
-            # Write frame
             out.write(frame)
             
-            # Update progress
             frame_idx += 1
             progress = min(95, int(frame_idx / total_frames * 100))
             yield progress
         
-        # Release resources
         cap.release()
         out.release()
         
-        # Convert to web-compatible format with audio
         try:
             subprocess.run([
                 'ffmpeg', '-i', temp_output, '-i', target_path,
@@ -245,18 +296,15 @@ st.sidebar.write(f"Running on: {device}")
 
 # Process button
 if st.button("Start Face Swap", disabled=(source_file is None or target_file is None)):
-    if not HAS_DEPENDENCIES or not HAS_INSIGHTFACE or not HAS_SIMSWAP:
-        st.error("Required dependencies are missing. Please install insightface, SimSwap, and other dependencies.")
+    if not HAS_DEPENDENCIES or not HAS_INSIGHTFACE:
+        st.error("Required dependencies are missing. Please install insightface and other dependencies.")
     else:
-        # Show progress
         progress_bar = st.progress(0)
         status_text = st.empty()
         status_text.text("Processing... Please wait")
         
-        # Create temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                # Save uploaded files
                 source_path = os.path.join(temp_dir, f"source{os.path.splitext(source_file.name)[1]}")
                 with open(source_path, "wb") as f:
                     f.write(source_file.getbuffer())
@@ -265,19 +313,15 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
                 with open(target_path, "wb") as f:
                     f.write(target_file.getbuffer())
                 
-                # Set output path
                 output_path = os.path.join(temp_dir, f"output{os.path.splitext(target_file.name)[1]}")
                 
-                # Progress updates
                 progress_bar.progress(10)
                 
-                # Process based on file type
                 is_video = target_file.name.lower().endswith('.mp4')
                 
                 if is_video:
                     status_text.text("Processing video... This may take several minutes")
                     
-                    # Process video with progress updates
                     success = False
                     for progress in process_video(source_path, target_path, output_path, many_faces):
                         progress_bar.progress(progress)
@@ -286,11 +330,9 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
                             success = True
                     
                     if success and os.path.exists(output_path):
-                        # Show result
                         st.subheader("Result")
                         st.video(output_path)
                         
-                        # Download button
                         with open(output_path, "rb") as file:
                             st.download_button(
                                 label="Download Processed Video",
@@ -303,15 +345,14 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
                 else:
                     status_text.text("Processing image...")
                     
-                    # Initialize SimSwap for image
-                    simswap_model = SimSwapModel()
-                    simswap_model.load_model(checkpoint_path="./SimSwap/checkpoints/simswap_256.pth")
-                    simswap_model.eval()
-                    simswap_model.to(device)
-                    
-                    # Process image
                     app = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider' if torch.cuda.is_available() else 'CPUExecutionProvider'])
                     app.prepare(ctx_id=0, det_size=(640, 640))
+                    
+                    simswap_model = SimSwapModel()
+                    if HAS_SIMSWAP:
+                        simswap_model.load_model(checkpoint_path="./SimSwap/checkpoints/simswap_256.pth")
+                        simswap_model.eval()
+                        simswap_model.to(device)
                     
                     source_img = cv2.imread(source_path)
                     target_img = cv2.imread(target_path)
@@ -321,18 +362,23 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
                     if len(source_faces) == 0 or len(target_faces) == 0:
                         st.error("No face found in source or target image")
                     else:
-                        result_img = face_swap_using_simswap(source_img, target_img, source_faces[0], 
-                                                            target_faces[:1] if not many_faces else target_faces, 
-                                                            simswap_model)
+                        if HAS_SIMSWAP:
+                            result_img = face_swap_using_simswap(
+                                source_img, target_img, source_faces[0], 
+                                target_faces[:1] if not many_faces else target_faces, simswap_model
+                            )
+                        else:
+                            result_img = face_swap_using_landmarks(
+                                source_img, target_img, source_faces[0], 
+                                target_faces[:1] if not many_faces else target_faces
+                            )
                         cv2.imwrite(output_path, result_img)
                         
-                        # Display result
                         result_img_rgb = cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB)
                         st.subheader("Result")
                         st.image(result_img_rgb, caption="Face Swap Result", use_container_width=True)
                         
-                        # Download button
-                        with open(output_path, "rb") as file:
+                        with open(output_path, "rb did you mean to say "rb"?") as file:
                             st.download_button(
                                 label="Download Processed Image",
                                 data=file,
