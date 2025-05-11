@@ -3,8 +3,24 @@ import sys
 import tempfile
 import streamlit as st
 from pathlib import Path
-import cv2
-import numpy as np
+
+# Initialize Streamlit interface first
+st.set_page_config(
+    page_title="AI Face Swap App",
+    page_icon="🎭",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Try importing OpenCV with error handling
+try:
+    import cv2
+    import numpy as np
+except ImportError as e:
+    st.error(f"Failed to import OpenCV: {e}")
+    st.error("This might be due to missing system libraries. Please check the logs.")
+    st.info("Try installing required system dependencies with: apt-get install libgl1-mesa-glx libglib2.0-0 libsm6 libxrender1 libxext6")
+    st.stop()
 
 # Add the project directory to the path so we can import the roop modules
 sys.path.append(os.path.abspath("."))
@@ -17,13 +33,6 @@ try:
 except ImportError as e:
     st.error(f"Failed to import roop modules: {e}")
     st.stop()
-
-st.set_page_config(
-    page_title="AI Face Swap App",
-    page_icon="🎭",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 st.title("🎭 AI Face Swap")
 st.subheader("Upload a source face and target video/image to swap faces")

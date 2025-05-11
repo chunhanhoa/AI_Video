@@ -1,3 +1,11 @@
+# System dependencies for OpenCV
+libgl1-mesa-glx
+libglib2.0-0
+libsm6
+libxrender1
+libxext6
+ffmpeg
+# Build tools
 cmake
 build-essential
 python3-dev
