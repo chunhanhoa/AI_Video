@@ -27,21 +27,59 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
 
-# Try to import roop modules
-try:
-    # These are the key modules from your roop library
-    from roop.processors.frame.face_swapper import FaceSwapper
-    from roop.processors.frame.face_enhancer import FaceEnhancer
-    from roop.core import extract_face_images, find_similar_face
-    from roop.utilities import has_image_extension, is_image, is_video, detect_fps
+# Create a simplified version of the functionality without requiring customtkinter
+class SimpleFaceProcessor:
+    def __init__(self):
+        self.loaded = False
+        try:
+            # Try to import insightface for face processing
+            import insightface
+            import onnxruntime
+            from insightface.app import FaceAnalysis
+            
+            # Initialize face analyzer
+            self.face_analyzer = FaceAnalysis(
+                name="buffalo_l", 
+                providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+            )
+            self.face_analyzer.prepare(ctx_id=0, det_size=(640, 640))
+            self.loaded = True
+        except ImportError as e:
+            st.warning(f"Could not initialize face processor: {e}")
     
-    # Initialize processors
-    face_swapper = FaceSwapper()
-    face_enhancer = FaceEnhancer()
-    has_core_modules = True
-except ImportError as e:
-    st.warning(f"Could not import roop modules: {e}")
-    st.info("Running in limited functionality mode.")
+    def swap_face(self, source_img, target_img):
+        """Simple face swap using insightface directly"""
+        if not self.loaded:
+            return None
+            
+        try:
+            import insightface
+            from insightface.app import FaceSwap
+            
+            # Initialize face swapper
+            face_swapper = FaceSwap()
+            
+            # Get faces from source image
+            source_faces = self.face_analyzer.get(source_img)
+            if len(source_faces) == 0:
+                st.error("No face detected in source image")
+                return None
+                
+            # Get faces from target image
+            target_faces = self.face_analyzer.get(target_img)
+            if len(target_faces) == 0:
+                st.error("No face detected in target image")
+                return None
+                
+            # Swap face
+            result = face_swapper.get(target_img, target_faces[0], source_faces[0])
+            return result
+        except Exception as e:
+            st.error(f"Error in face swapping: {e}")
+            return None
+
+# Create our simplified processor
+face_processor = SimpleFaceProcessor()
 
 # App title and description
 st.title("🎭 AI Face Swap")
@@ -55,13 +93,13 @@ target_file = st.file_uploader("Upload target video/image", type=["jpg", "jpeg",
 col1, col2 = st.columns(2)
 if source_file is not None:
     with col1:
-        st.image(source_file, caption="Source Face", use_column_width=True)
+        st.image(source_file, caption="Source Face", use_container_width=True)
         
 if target_file is not None:
     with col2:
         file_type = target_file.name.split(".")[-1].lower()
         if file_type in ["jpg", "jpeg", "png"]:
-            st.image(target_file, caption="Target Image", use_column_width=True)
+            st.image(target_file, caption="Target Image", use_container_width=True)
         elif file_type == "mp4":
             st.video(target_file, format="video/mp4")
 
@@ -73,47 +111,6 @@ with st.sidebar:
     keep_frames = st.checkbox("Keep Temp Frames", value=False)
     skip_audio = st.checkbox("Skip Audio", value=False)
     many_faces = st.checkbox("Process Multiple Faces", value=False)
-
-# Define processing function
-def process_files(source_path, target_path, output_path):
-    if not has_core_modules:
-        st.error("Required modules not available. Cannot process files.")
-        return False
-    
-    try:
-        if is_image(target_path):
-            # Process image
-            source_face = extract_face_images(source_path)[0]
-            target_image = cv2.imread(target_path)
-            
-            # Swap face
-            result_image = face_swapper.process_frame(target_image, source_face)
-            
-            # Enhance if selected
-            if enhance_face:
-                result_image = face_enhancer.process_frame(result_image)
-                
-            # Save result
-            cv2.imwrite(output_path, result_image)
-            return True
-            
-        elif is_video(target_path):
-            # For video, we need to process frame by frame
-            from roop.predictor import predict_video
-            result = predict_video(
-                source_path=source_path,
-                target_path=target_path,
-                output_path=output_path,
-                frame_processors=["face_swapper", "face_enhancer"] if enhance_face else ["face_swapper"],
-                keep_fps=keep_fps,
-                keep_frames=keep_frames,
-                skip_audio=skip_audio,
-                many_faces=many_faces
-            )
-            return True
-    except Exception as e:
-        st.error(f"Processing error: {e}")
-        return False
 
 # Process button
 if st.button("Start Face Swap", disabled=(source_file is None or target_file is None)):
@@ -146,45 +143,57 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
             progress_bar.progress(30)
             status_text.text("Processing... This may take a while.")
             
-            # Actual processing
-            success = process_files(source_path, target_path, output_path)
-            
-            if success:
-                progress_bar.progress(100)
-                status_text.text("Processing complete!")
-                
-                # Display result
-                st.subheader("Result")
-                if is_image(target_path):
-                    # For image results
-                    result_image = cv2.imread(output_path)
-                    result_image = cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)
-                    st.image(result_image, caption="Processed Result", use_column_width=True)
+            # Check if target is an image
+            if target_file.name.lower().endswith(('.jpg', '.jpeg', '.png')):
+                try:
+                    # Read images
+                    source_img = cv2.imread(source_path)
+                    target_img = cv2.imread(target_path)
                     
-                    # Provide download button
-                    with open(output_path, "rb") as file:
-                        btn = st.download_button(
-                            label="Download Result",
-                            data=file,
-                            file_name="faceswap_result" + os.path.splitext(target_file.name)[1],
-                            mime=f"image/{os.path.splitext(target_file.name)[1][1:]}"
-                        )
-                else:
-                    # For video results
-                    st.video(output_path)
+                    # Convert BGR to RGB for display
+                    source_img_rgb = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB)
+                    target_img_rgb = cv2.cvtColor(target_img, cv2.COLOR_BGR2RGB)
                     
-                    # Provide download button
-                    with open(output_path, "rb") as file:
-                        btn = st.download_button(
-                            label="Download Result",
-                            data=file,
-                            file_name="faceswap_result.mp4",
-                            mime="video/mp4"
-                        )
+                    # Process using our simplified processor
+                    progress_bar.progress(50)
+                    result_img = face_processor.swap_face(source_img, target_img)
+                    
+                    if result_img is not None:
+                        # Save result
+                        cv2.imwrite(output_path, result_img)
+                        
+                        # Convert to RGB for display
+                        result_img_rgb = cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB)
+                        
+                        # Show result
+                        progress_bar.progress(100)
+                        status_text.text("Processing complete!")
+                        
+                        st.subheader("Result")
+                        st.image(result_img_rgb, caption="Processed Result", use_container_width=True)
+                        
+                        # Provide download button
+                        with open(output_path, "rb") as file:
+                            btn = st.download_button(
+                                label="Download Result",
+                                data=file,
+                                file_name="faceswap_result" + os.path.splitext(target_file.name)[1],
+                                mime=f"image/{os.path.splitext(target_file.name)[1][1:]}"
+                            )
+                    else:
+                        progress_bar.progress(100)
+                        status_text.text("Processing failed.")
+                        st.error("Failed to process the face swap. See error message above.")
+                        
+                except Exception as e:
+                    progress_bar.progress(100)
+                    status_text.text("Processing failed.")
+                    st.error(f"Error processing images: {e}")
             else:
+                # For video
                 progress_bar.progress(100)
-                status_text.text("Processing failed.")
-                st.error("Failed to process files. See error message above.")
+                status_text.text("Video processing not implemented in this simplified version.")
+                st.warning("Video processing requires additional dependencies that aren't available in this environment.")
 
 # System information
 with st.expander("System Information"):
@@ -194,10 +203,22 @@ with st.expander("System Information"):
     else:
         st.error("OpenCV is not available")
     
-    if has_core_modules:
-        st.success("Roop face swap modules loaded successfully")
-    else:
-        st.error("Roop face swap modules could not be loaded")
+    # Check for insightface
+    try:
+        import insightface
+        st.success(f"InsightFace version: {insightface.__version__}")
+    except ImportError:
+        st.error("InsightFace not available")
+    
+    # Try to check for GPU
+    try:
+        import tensorflow as tf
+        if tf.config.list_physical_devices('GPU'):
+            st.success("GPU is available for processing")
+        else:
+            st.warning("GPU not available, using CPU only")
+    except:
+        st.info("Unable to check GPU status")
 
 # Footer
 st.markdown("---")
