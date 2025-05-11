@@ -1,13 +1,9 @@
 import streamlit as st
 
-# Set page config MUST be the first Streamlit command
-st.set_page_config(
-    page_title="AI Face Swap",
-    page_icon="🎭",
-    layout="wide"
-)
+# This MUST be the first Streamlit command in the script
+st.set_page_config(page_title="AI Face Swap", page_icon="🎭", layout="wide")
 
-# Only import other libraries after st.set_page_config
+# Now import other libraries
 import os
 import sys
 import tempfile
