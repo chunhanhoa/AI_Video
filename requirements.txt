@@ -1,25 +1,26 @@
---extra-index-url https://download.pytorch.org/whl/cu118
+# Using only PyPI to avoid authentication issues
+# --extra-index-url https://download.pytorch.org/whl/cu118
 
 setuptools>=65.5.0
 wheel>=0.38.0
 numpy>=1.26.0
 # Use a pre-built onnx wheel instead of building from source
 onnx>=1.14.0
-opencv-python==4.8.0.74
-insightface==0.7.3
-psutil==5.9.5
+opencv-python>=4.7.0
+insightface>=0.7.0
+psutil>=5.9.0
 # Removing tk dependency for Streamlit
 # tk==0.1.0
 # customtkinter==5.2.0
 # tkinterdnd2==0.3.0; sys_platform != 'darwin' and platform_machine != 'arm64'
 # tkinterdnd2-universal==1.7.3; sys_platform == 'darwin' and platform_machine == 'arm64'
-pillow==10.0.0
-# Simplifying onnxruntime dependencies
-onnxruntime-gpu==1.15.1; sys_platform != 'darwin'
-onnxruntime==1.15.1; sys_platform == 'darwin'
-tensorflow==2.13.0
-opennsfw2==0.10.2
-protobuf==4.23.4
-tqdm==4.65.0
-gfpgan==1.3.8
+pillow>=9.0.0
+# Simplifying and updating onnxruntime dependencies
+onnxruntime>=1.15.0; sys_platform == 'darwin'
+onnxruntime-gpu>=1.15.0; sys_platform != 'darwin'
+tensorflow>=2.12.0
+opennsfw2>=0.10.0
+protobuf>=4.23.0
+tqdm>=4.60.0
+gfpgan>=1.3.8
 streamlit>=1.22.0

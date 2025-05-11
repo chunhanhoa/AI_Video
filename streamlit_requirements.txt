@@ -13,3 +13,14 @@ streamlit>=1.22.0
 protobuf>=4.23.0
 tqdm>=4.65.0
 gfpgan>=1.3.8
+
+# Streamlit-specific requirements
+streamlit>=1.22.0
+numpy>=1.26.0
+opencv-python>=4.7.0
+pillow>=9.0.0
+onnxruntime>=1.15.0
+insightface>=0.7.0
+protobuf>=4.21.0
+tqdm>=4.60.0
+gfpgan>=1.3.8
