@@ -4,7 +4,7 @@ setuptools>=65.5.0
 wheel>=0.38.0
 numpy>=1.26.0
 # Use a pre-built onnx wheel instead of building from source
-onnx>=1.14.0 --no-build-isolation
+onnx>=1.14.0
 opencv-python==4.8.0.74
 insightface==0.7.3
 psutil==5.9.5

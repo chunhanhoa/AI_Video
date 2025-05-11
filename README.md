@@ -79,3 +79,23 @@ Our software uses a lot of third party libraries as well pre-trained models. The
 ## Documentation
 
 Read the [documentation](https://github.com/s0md3v/roop/wiki) for a deep dive.
+
+# AI Video Application
+
+## Deployment Instructions
+
+### Local Development
+To run this application locally:
+```bash
+pip install -r requirements.txt
+streamlit run run.py
+```
+
+### Streamlit Deployment
+This application is configured for deployment on Streamlit Cloud.
+
+To deploy:
+1. Push to GitHub
+2. Connect to Streamlit Cloud
+3. Point to run.py as the main script
+4. Advanced settings: use streamlit_requirements.txt if the deployment fails with regular requirements.txt
