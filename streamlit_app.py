@@ -2,6 +2,16 @@ import streamlit as st
 import os
 import sys
 
+# Safer imports with error handling
+try:
+    import numpy as np
+    import cv2
+    from PIL import Image
+    HAS_DEPENDENCIES = True
+except ImportError as e:
+    st.error(f"Missing dependency: {e}")
+    HAS_DEPENDENCIES = False
+
 # Basic app setup
 st.set_page_config(
     page_title="AI Face Swap",
@@ -67,13 +77,11 @@ st.caption("Created for demonstration purposes only")
 
 # System info in an expander
 with st.expander("System Information"):
-    st.code(f"Python version: {sys.version}")
+    st.write(f"Python version: {sys.version}")
     
-    # Check for dependencies safely
-    for module in ["cv2", "numpy", "tensorflow", "onnx"]:
-        try:
-            imported = __import__(module)
-            version = getattr(imported, "__version__", "unknown")
-            st.success(f"✅ {module}: {version}")
-        except ImportError:
-            st.error(f"❌ {module}: Not installed")
+    if HAS_DEPENDENCIES:
+        st.success("✅ All required dependencies are installed")
+        st.write(f"OpenCV version: {cv2.__version__}")
+        st.write(f"NumPy version: {np.__version__}")
+    else:
+        st.error("❌ Some dependencies are missing")
