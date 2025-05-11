@@ -9,11 +9,11 @@ onnx>=1.14.0
 opencv-python>=4.7.0
 insightface>=0.7.0
 psutil>=5.9.0
-# Removing tk dependency for Streamlit
-# tk==0.1.0
-# customtkinter==5.2.0
-# tkinterdnd2==0.3.0; sys_platform != 'darwin' and platform_machine != 'arm64'
-# tkinterdnd2-universal==1.7.3; sys_platform == 'darwin' and platform_machine == 'arm64'
+# Reinstating tkinter dependencies needed by the application
+tk>=0.1.0
+customtkinter>=5.2.0
+tkinterdnd2>=0.3.0; sys_platform != 'darwin' and platform_machine != 'arm64'
+tkinterdnd2-universal>=1.7.3; sys_platform == 'darwin' and platform_machine == 'arm64'
 pillow>=9.0.0
 # Simplifying and updating onnxruntime dependencies
 onnxruntime>=1.15.0; sys_platform == 'darwin'
