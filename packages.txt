@@ -10,6 +10,3 @@ ffmpeg
 cmake
 build-essential
 python3-dev
-# Additional libraries that might be needed
-libgtk2.0-dev
-libcairo2-dev
