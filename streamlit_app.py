@@ -51,23 +51,67 @@ def swap_face(source_path, target_path, output_path):
             st.error("No face found in target image")
             return False
         
-        # Since FaceSwap is not available in the cloud environment,
-        # we'll implement a simpler version using the model directly
-        import insightface.model_zoo
-        
-        # Load face swapping model
-        model = insightface.model_zoo.get_model('inswapper_128.onnx', 
-                                              download=True, 
-                                              download_zip=True)
-        
-        # Perform face swap
-        result = target_img.copy()
-        for target_face in target_faces:
-            result = model.get(result, target_face, source_faces[0], paste_back=True)
-        
-        # Save the result
-        cv2.imwrite(output_path, result)
-        return True
+        # Try a different approach for face swapping since downloading is failing
+        try:
+            import insightface.model_zoo
+            try:
+                # Try first with local URL
+                model = insightface.model_zoo.get_model('inswapper_128.onnx', download=False)
+            except:
+                # Try with alternative URL
+                alt_url = "https://huggingface.co/deepinsight/inswapper/resolve/main/inswapper_128.onnx"
+                local_path = os.path.expanduser("~/.insightface/models/inswapper_128.onnx")
+                
+                # Make sure directory exists
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                
+                # Download directly
+                st.info(f"Downloading model from alternative source: {alt_url}")
+                import urllib.request
+                urllib.request.urlretrieve(alt_url, local_path)
+                
+                # Load the model
+                model = insightface.model_zoo.get_model(local_path, download=False)
+            
+            # Perform face swap
+            result = target_img.copy()
+            for target_face in target_faces:
+                result = model.get(result, target_face, source_faces[0], paste_back=True)
+            
+            # Save the result
+            cv2.imwrite(output_path, result)
+            return True
+        except Exception as e:
+            st.error(f"Error with model: {e}")
+            
+            # Simple alternative method - blend the faces
+            st.warning("Using simplified face blending as fallback")
+            
+            # Get face landmarks
+            source_lm = source_faces[0].landmark_2d_106
+            target_lm = target_faces[0].landmark_2d_106
+            
+            # Create a simple mask for the face region
+            mask = np.zeros_like(target_img[:,:,0], dtype=np.uint8)
+            hull = cv2.convexHull(target_lm.astype(np.int32))
+            cv2.fillConvexPoly(mask, hull, 255)
+            
+            # Warp source face to match target face shape
+            h, w = target_img.shape[:2]
+            warped = cv2.warpAffine(
+                source_img,
+                cv2.estimateAffinePartial2D(source_lm, target_lm, method=cv2.LMEDS)[0],
+                (w, h)
+            )
+            
+            # Blend faces
+            mask_3d = np.stack([mask]*3, axis=2) / 255.0
+            result = target_img * (1-mask_3d) + warped * mask_3d
+            result = result.astype(np.uint8)
+            
+            # Save result
+            cv2.imwrite(output_path, result)
+            return True
     except Exception as e:
         st.error(f"Face swap error: {e}")
         import traceback
@@ -77,95 +121,117 @@ def swap_face(source_path, target_path, output_path):
 # Safer video face swapping
 def process_video(source_path, video_path, output_path):
     try:
-        # Use moviepy instead of OpenCV for video processing
-        from moviepy.editor import VideoFileClip, ImageSequenceClip
-        import insightface
-        from insightface.app import FaceAnalysis
-        import insightface.model_zoo
-        import glob
+        # Import dependencies
+        import cv2
         
-        # Create temp directory for frames
-        temp_frames_dir = os.path.join(os.path.dirname(output_path), "frames")
-        os.makedirs(temp_frames_dir, exist_ok=True)
-        
-        # Load video
-        video_clip = VideoFileClip(video_path)
+        # Use OpenCV for video processing instead of moviepy (more reliable)
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            st.error("Failed to open video file")
+            return False
+            
+        # Get video properties
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
         # Initialize face analyzer
+        import insightface
+        from insightface.app import FaceAnalysis
+        
         app = FaceAnalysis(name="buffalo_l", providers=['CPUExecutionProvider'])
         app.prepare(ctx_id=0, det_size=(640, 640))
         
-        # Load face swapping model
-        model = insightface.model_zoo.get_model('inswapper_128.onnx', 
-                                              download=True, 
-                                              download_zip=True)
-        
-        # Load source image and detect face
+        # Read source face
         source_img = cv2.imread(source_path)
         source_faces = app.get(source_img)
         if len(source_faces) == 0:
             st.error("No face found in source image")
+            cap.release()
             return False
         source_face = source_faces[0]
         
-        # Process the video
-        total_frames = int(video_clip.fps * video_clip.duration)
-        processed_frames = []
+        # Try to get the model
+        try:
+            import insightface.model_zoo
+            try:
+                # Try first with local URL
+                model = insightface.model_zoo.get_model('inswapper_128.onnx', download=False)
+            except:
+                # Try with alternative URL
+                alt_url = "https://huggingface.co/deepinsight/inswapper/resolve/main/inswapper_128.onnx"
+                local_path = os.path.expanduser("~/.insightface/models/inswapper_128.onnx")
+                
+                # Make sure directory exists
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                
+                # Download directly
+                st.info(f"Downloading model from alternative source: {alt_url}")
+                import urllib.request
+                urllib.request.urlretrieve(alt_url, local_path)
+                
+                # Load the model
+                model = insightface.model_zoo.get_model(local_path, download=False)
+        except Exception as e:
+            st.error(f"Failed to load face swap model: {e}")
+            cap.release()
+            return False
         
-        # Process in batches to save memory
-        frame_batch_size = 30
-        for i, frame in enumerate(video_clip.iter_frames()):
-            # Convert RGB to BGR (for insightface)
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            
-            # Detect faces
-            faces = app.get(frame_bgr)
-            
-            # Apply face swap if faces are detected
-            if len(faces) > 0:
-                for face in faces:
-                    frame_bgr = model.get(frame_bgr, face, source_face, paste_back=True)
-            
-            # Convert back to RGB for moviepy
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            processed_frames.append(frame_rgb)
-            
-            # Save batch of frames
-            if len(processed_frames) >= frame_batch_size or i == total_frames - 1:
-                batch_clip = ImageSequenceClip(processed_frames, fps=video_clip.fps)
+        # Prepare output video
+        temp_dir = os.path.dirname(output_path)
+        temp_output = os.path.join(temp_dir, "temp_output.mp4") 
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(temp_output, fourcc, fps, (width, height))
+        
+        # Process frames
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
                 
-                # Use unique temp filename for each batch
-                temp_output = os.path.join(temp_frames_dir, f"batch_{i//frame_batch_size}.mp4")
-                batch_clip.write_videofile(temp_output, codec='libx264', audio=False, verbose=False, logger=None)
+            # Only process every 2nd frame for speed (adjust as needed)
+            if frame_count % 2 == 0:
+                # Detect faces
+                faces = app.get(frame)
                 
-                # Clear memory
-                processed_frames = []
-                batch_clip = None
-                
+                # Swap faces if any are found
+                if len(faces) > 0:
+                    # Apply to all faces or just the first one based on setting
+                    face_to_process = faces if many_faces else [faces[0]]
+                    for face in face_to_process:
+                        try:
+                            frame = model.get(frame, face, source_face, paste_back=True)
+                        except:
+                            pass
+            
+            # Write the frame
+            out.write(frame)
+            
             # Update progress
-            yield min(95, int((i + 1) / total_frames * 100))
-            
-        # Combine all batches
-        from moviepy.editor import concatenate_videoclips
-        batch_files = sorted(glob.glob(os.path.join(temp_frames_dir, "batch_*.mp4")))
-        batch_clips = [VideoFileClip(f) for f in batch_files]
+            frame_count += 1
+            if frame_count % 10 == 0:  # Update progress every 10 frames
+                progress = min(95, int((frame_count / total_frames) * 100))
+                yield progress
         
-        # Create final clip
-        if batch_clips:
-            final_clip = concatenate_videoclips(batch_clips, method="compose") 
-            
-            # Add audio if available
-            if video_clip.audio is not None:
-                final_clip = final_clip.set_audio(video_clip.audio)
-                
-            # Write final video
-            final_clip.write_videofile(output_path, codec='libx264')
-            
-            # Clean up
-            for clip in batch_clips:
-                clip.close()
-            final_clip.close()
-            
+        # Release resources
+        cap.release()
+        out.release()
+        
+        # Copy output with compatible codec (convert if needed)
+        import subprocess
+        try:
+            subprocess.run([
+                'ffmpeg', '-i', temp_output, 
+                '-c:v', 'libx264', '-preset', 'fast',
+                '-pix_fmt', 'yuv420p', output_path
+            ], check=True, capture_output=True)
+        except:
+            # If ffmpeg fails, just use the original output
+            import shutil
+            shutil.copy2(temp_output, output_path)
+        
         yield 100
         return True
     except Exception as e:
@@ -173,12 +239,6 @@ def process_video(source_path, video_path, output_path):
         import traceback
         st.code(traceback.format_exc())
         return False
-    finally:
-        # Close video clip
-        try:
-            video_clip.close()
-        except:
-            pass
 
 st.title("🎭 AI Face Swap")
 st.subheader("Upload a source face and a target image/video to swap faces")
