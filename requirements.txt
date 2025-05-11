@@ -1,26 +1,31 @@
-# Using only PyPI to avoid authentication issues
-# --extra-index-url https://download.pytorch.org/whl/cu118
-
+# Core Python packages
 setuptools>=65.5.0
 wheel>=0.38.0
 numpy>=1.26.0
-# Use a pre-built onnx wheel instead of building from source
-onnx>=1.14.0
-opencv-python>=4.7.0
-insightface>=0.7.0
-psutil>=5.9.0
-# Reinstating tkinter dependencies needed by the application
-tk>=0.1.0
-customtkinter>=5.2.0
-tkinterdnd2>=0.3.0; sys_platform != 'darwin' and platform_machine != 'arm64'
-tkinterdnd2-universal>=1.7.3; sys_platform == 'darwin' and platform_machine == 'arm64'
+
+# Image and video processing
+opencv-python-headless>=4.7.0  # Headless version avoids GUI dependencies
 pillow>=9.0.0
-# Simplifying and updating onnxruntime dependencies
+
+# AI and ML frameworks
+onnx>=1.14.0
+insightface>=0.7.0
+tensorflow>=2.12.0
+gfpgan>=1.3.8
+
+# UI and utility packages
+streamlit>=1.22.0
+psutil>=5.9.0
+tqdm>=4.60.0
+protobuf>=4.23.0
+opennsfw2>=0.10.0
+
+# Runtime dependencies
 onnxruntime>=1.15.0; sys_platform == 'darwin'
 onnxruntime-gpu>=1.15.0; sys_platform != 'darwin'
-tensorflow>=2.12.0
-opennsfw2>=0.10.0
-protobuf>=4.23.0
-tqdm>=4.60.0
-gfpgan>=1.3.8
-streamlit>=1.22.0
+
+# UI components if needed (commented out for now)
+# tk>=0.1.0
+# customtkinter>=5.2.0
+# tkinterdnd2>=0.3.0; sys_platform != 'darwin' and platform_machine != 'arm64'
+# tkinterdnd2-universal>=1.7.3; sys_platform == 'darwin' and platform_machine == 'arm64'

@@ -1,151 +1,127 @@
 import os
 import sys
-import tempfile
 import streamlit as st
-from pathlib import Path
+import tempfile
+import numpy as np
+import cv2
+from PIL import Image
+import tensorflow as tf  # Import TensorFlow to ensure it's initialized
 
-# Initialize Streamlit interface first
+# Configure Streamlit
 st.set_page_config(
-    page_title="AI Face Swap App",
+    page_title="AI Face Swap",
     page_icon="🎭",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Try importing OpenCV with error handling
-try:
-    import cv2
-    import numpy as np
-except ImportError as e:
-    st.error(f"Failed to import OpenCV: {e}")
-    st.error("This might be due to missing system libraries. Please check the logs.")
-    st.info("Try installing required system dependencies with: apt-get install libgl1-mesa-glx libglib2.0-0 libsm6 libxrender1 libxext6")
-    st.stop()
-
-# Add the project directory to the path so we can import the roop modules
-sys.path.append(os.path.abspath("."))
-
-# Import core functionality without UI dependencies
-try:
-    from roop.predictor import predict_image, predict_video
-    from roop.processors.frame.core import get_frame_processors_modules
-    from roop.utilities import has_image_extension, is_image, is_video, detect_fps
-except ImportError as e:
-    st.error(f"Failed to import roop modules: {e}")
-    st.stop()
-
 st.title("🎭 AI Face Swap")
-st.subheader("Upload a source face and target video/image to swap faces")
+st.caption("Upload a source face and a target image/video to swap faces")
 
-with st.sidebar:
-    st.header("Settings")
-    frame_processors = st.multiselect(
-        "Frame Processors",
-        options=["face_swapper", "face_enhancer"],
-        default=["face_swapper"]
-    )
-    
-    keep_fps = st.checkbox("Keep Original FPS", value=True)
-    keep_frames = st.checkbox("Keep Temporary Frames", value=False)
-    skip_audio = st.checkbox("Skip Audio", value=False)
-    many_faces = st.checkbox("Many Faces", value=False)
-    
-    selected_enhancer = st.selectbox(
-        "Face Enhancer",
-        options=["GFPGAN"],
-        index=0
-    )
+# Simple file upload interface
+source_file = st.file_uploader("Upload source face image", type=["jpg", "jpeg", "png"])
+target_file = st.file_uploader("Upload target video/image", type=["jpg", "jpeg", "png", "mp4"])
 
 col1, col2 = st.columns(2)
 
-with col1:
-    st.subheader("Source Face")
-    source_image = st.file_uploader("Upload source face image", type=["jpg", "jpeg", "png"])
-    if source_image is not None:
-        st.image(source_image, caption="Source Face", use_column_width=True)
-
-with col2:
-    st.subheader("Target")
-    target_file = st.file_uploader("Upload target video or image", type=["jpg", "jpeg", "png", "mp4"])
-    if target_file is not None and is_video(target_file.name):
-        st.video(target_file, format="video/mp4")
-    elif target_file is not None and is_image(target_file.name):
-        st.image(target_file, caption="Target Image", use_column_width=True)
-
-if st.button("Process", type="primary"):
-    if source_image is None:
-        st.error("Please upload a source face image.")
-    elif target_file is None:
-        st.error("Please upload a target video or image.")
-    else:
-        progress_text = "Processing... Please wait."
-        my_bar = st.progress(0, text=progress_text)
+# Display uploaded files
+if source_file is not None:
+    with col1:
+        st.image(source_file, caption="Source Face", use_column_width=True)
         
-        # Save uploaded files to temp directory
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_source = os.path.join(temp_dir, "source" + os.path.splitext(source_image.name)[1])
-            with open(temp_source, "wb") as f:
-                f.write(source_image.getbuffer())
+if target_file is not None:
+    with col2:
+        file_type = target_file.name.split(".")[-1].lower()
+        if file_type in ["jpg", "jpeg", "png"]:
+            st.image(target_file, caption="Target Image", use_column_width=True)
+        elif file_type == "mp4":
+            st.video(target_file, format="video/mp4")
+
+# Processing settings
+with st.sidebar:
+    st.header("Settings")
+    enhance_face = st.checkbox("Enhance face quality", value=True)
+    keep_original_size = st.checkbox("Keep original size", value=True)
+    many_faces = st.checkbox("Process multiple faces", value=False)
+
+# Process button
+if st.button("Swap Face", disabled=(source_file is None or target_file is None)):
+    st.info("Processing... (this could take a while)")
+    
+    # Create a progress bar
+    progress_bar = st.progress(0)
+    
+    # Sample placeholder code (doesn't actually do face swapping)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        if source_file and target_file:
+            # Update progress
+            progress_bar.progress(10)
             
-            temp_target = os.path.join(temp_dir, target_file.name)
-            with open(temp_target, "wb") as f:
+            # Save the uploaded files
+            source_path = os.path.join(temp_dir, "source.jpg")
+            with open(source_path, "wb") as f:
+                f.write(source_file.getbuffer())
+            
+            # Update progress
+            progress_bar.progress(30)
+                
+            target_path = os.path.join(temp_dir, "target." + target_file.name.split(".")[-1])
+            with open(target_path, "wb") as f:
                 f.write(target_file.getbuffer())
             
-            # Output path
-            output_path = os.path.join(temp_dir, "output" + os.path.splitext(target_file.name)[1])
+            # Update progress    
+            progress_bar.progress(50)
             
+            st.success(f"Files saved to temporary directory. Ready for processing.")
+            
+            # Try to import and use the roop library if possible
             try:
-                # Process either image or video
-                if is_image(target_file.name):
-                    result = predict_image(
-                        source_path=temp_source,
-                        target_path=temp_target,
-                        output_path=output_path,
-                        frame_processors=frame_processors,
-                        many_faces=many_faces,
-                    )
-                    my_bar.progress(100, text="Processing complete!")
-                    result_image = cv2.imread(output_path)
-                    result_image = cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)
-                    st.image(result_image, caption="Result", use_column_width=True)
-                    
-                    # Provide download button for the result
-                    with open(output_path, "rb") as file:
-                        st.download_button(
-                            label="Download Result",
-                            data=file,
-                            file_name="face_swap_result" + os.path.splitext(target_file.name)[1],
-                            mime=f"image/{os.path.splitext(target_file.name)[1][1:]}"
-                        )
+                # Add the current directory to path
+                if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+                    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
                 
-                elif is_video(target_file.name):
-                    result = predict_video(
-                        source_path=temp_source,
-                        target_path=temp_target,
-                        output_path=output_path,
-                        frame_processors=frame_processors,
-                        keep_fps=keep_fps,
-                        keep_frames=keep_frames,
-                        skip_audio=skip_audio,
-                        many_faces=many_faces,
-                    )
-                    my_bar.progress(100, text="Processing complete!")
-                    
-                    # Display the video result
-                    st.video(output_path)
-                    
-                    # Provide download button for the result
-                    with open(output_path, "rb") as file:
-                        st.download_button(
-                            label="Download Result",
-                            data=file,
-                            file_name="face_swap_result.mp4",
-                            mime="video/mp4"
-                        )
+                # Try to import roop functionality
+                from roop.face_analyser import get_face_analyser
+                from roop.utilities import is_image, is_video
+                
+                # Update progress
+                progress_bar.progress(70)
+                
+                # Let the user know we found Roop modules
+                st.success("Successfully imported Roop modules! Processing with actual face swap will be available soon.")
+                
+                # Future implementation will call actual roop functions:
+                # result = roop.swap_face(source_path, target_path, enhance_face, many_faces)
+                
+            except ImportError as e:
+                st.warning(f"Couldn't import Roop modules: {e}")
+                st.info("Running in demo mode without actual face swapping.")
             
-            except Exception as e:
-                st.error(f"An error occurred during processing: {e}")
-                raise e
+            # Update progress
+            progress_bar.progress(90)
+                
+            # For now just display the original target as a placeholder
+            st.subheader("Output Preview")
+            if target_file.name.endswith(('.jpg', '.jpeg', '.png')):
+                st.image(target_file, caption="Processed Result (Placeholder)", use_column_width=True)
+            else:
+                st.video(target_file, format="video/mp4")
+                
+            # Complete progress
+            progress_bar.progress(100)
 
+# Add system information in expander
+with st.expander("System Information"):
+    st.info(f"Python version: {sys.version}")
+    st.info(f"OpenCV version: {cv2.__version__}")
+    st.info(f"TensorFlow version: {tf.__version__}")
+    st.info(f"NumPy version: {np.__version__}")
+    
+    # Check for GPU
+    if tf.config.list_physical_devices('GPU'):
+        st.success("TensorFlow is using GPU acceleration")
+    else:
+        st.warning("TensorFlow is using CPU only")
+
+# Add footer
 st.markdown("---")
-st.caption("Powered by Roop AI • Created for educational purposes only")
+st.caption("Created for educational purposes only.")
