@@ -20,20 +20,16 @@ st.set_page_config(
     layout="wide"
 )
 
-# Add face swapping implementation
+# Add face swapping implementation using InsightFace model directly
 def swap_face(source_path, target_path, output_path):
     try:
         # Import insightface for face swapping
         import insightface
         from insightface.app import FaceAnalysis
-        from insightface.app import FaceSwap
         
         # Initialize face analyzer
         app = FaceAnalysis(name="buffalo_l", providers=['CPUExecutionProvider'])
         app.prepare(ctx_id=0, det_size=(640, 640))
-        
-        # Initialize face swapper
-        swapper = FaceSwap()
         
         # Load source and target images
         source_img = cv2.imread(source_path)
@@ -54,31 +50,57 @@ def swap_face(source_path, target_path, output_path):
         if len(target_faces) == 0:
             st.error("No face found in target image")
             return False
-            
+        
+        # Since FaceSwap is not available in the cloud environment,
+        # we'll implement a simpler version using the model directly
+        import insightface.model_zoo
+        
+        # Load face swapping model
+        model = insightface.model_zoo.get_model('inswapper_128.onnx', 
+                                              download=True, 
+                                              download_zip=True)
+        
         # Perform face swap
-        result = swapper.get(target_img, target_faces[0], source_faces[0], paste_back=True)
+        result = target_img.copy()
+        for target_face in target_faces:
+            result = model.get(result, target_face, source_faces[0], paste_back=True)
         
         # Save the result
         cv2.imwrite(output_path, result)
         return True
     except Exception as e:
         st.error(f"Face swap error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return False
 
-# Add video face swapping
-def swap_video_faces(source_path, video_path, output_path):
+# Safer video face swapping
+def process_video(source_path, video_path, output_path):
     try:
-        # Import required modules
+        # Use moviepy instead of OpenCV for video processing
+        from moviepy.editor import VideoFileClip, ImageSequenceClip
         import insightface
         from insightface.app import FaceAnalysis
-        from insightface.app import FaceSwap
+        import insightface.model_zoo
+        import glob
         
-        # Initialize face analyzer and swapper
+        # Create temp directory for frames
+        temp_frames_dir = os.path.join(os.path.dirname(output_path), "frames")
+        os.makedirs(temp_frames_dir, exist_ok=True)
+        
+        # Load video
+        video_clip = VideoFileClip(video_path)
+        
+        # Initialize face analyzer
         app = FaceAnalysis(name="buffalo_l", providers=['CPUExecutionProvider'])
         app.prepare(ctx_id=0, det_size=(640, 640))
-        swapper = FaceSwap()
         
-        # Load source face
+        # Load face swapping model
+        model = insightface.model_zoo.get_model('inswapper_128.onnx', 
+                                              download=True, 
+                                              download_zip=True)
+        
+        # Load source image and detect face
         source_img = cv2.imread(source_path)
         source_faces = app.get(source_img)
         if len(source_faces) == 0:
@@ -86,50 +108,77 @@ def swap_video_faces(source_path, video_path, output_path):
             return False
         source_face = source_faces[0]
         
-        # Open the video
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            st.error("Failed to open video file")
-            return False
+        # Process the video
+        total_frames = int(video_clip.fps * video_clip.duration)
+        processed_frames = []
+        
+        # Process in batches to save memory
+        frame_batch_size = 30
+        for i, frame in enumerate(video_clip.iter_frames()):
+            # Convert RGB to BGR (for insightface)
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             
-        # Get video properties
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        # Create a video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-        
-        frame_count = 0
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            # Process every frame
-            faces = app.get(frame)
+            # Detect faces
+            faces = app.get(frame_bgr)
+            
+            # Apply face swap if faces are detected
             if len(faces) > 0:
-                # Process the first face found (or loop through all faces if needed)
                 for face in faces:
-                    frame = swapper.get(frame, face, source_face, paste_back=True)
+                    frame_bgr = model.get(frame_bgr, face, source_face, paste_back=True)
             
-            # Write the frame
-            out.write(frame)
+            # Convert back to RGB for moviepy
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            processed_frames.append(frame_rgb)
             
-            # Update progress 
-            frame_count += 1
-            progress = min(99, int(frame_count / total_frames * 100))
-            yield progress, frame_count, total_frames
+            # Save batch of frames
+            if len(processed_frames) >= frame_batch_size or i == total_frames - 1:
+                batch_clip = ImageSequenceClip(processed_frames, fps=video_clip.fps)
+                
+                # Use unique temp filename for each batch
+                temp_output = os.path.join(temp_frames_dir, f"batch_{i//frame_batch_size}.mp4")
+                batch_clip.write_videofile(temp_output, codec='libx264', audio=False, verbose=False, logger=None)
+                
+                # Clear memory
+                processed_frames = []
+                batch_clip = None
+                
+            # Update progress
+            yield min(95, int((i + 1) / total_frames * 100))
             
-        # Release resources
-        cap.release()
-        out.release()
+        # Combine all batches
+        from moviepy.editor import concatenate_videoclips
+        batch_files = sorted(glob.glob(os.path.join(temp_frames_dir, "batch_*.mp4")))
+        batch_clips = [VideoFileClip(f) for f in batch_files]
+        
+        # Create final clip
+        if batch_clips:
+            final_clip = concatenate_videoclips(batch_clips, method="compose") 
+            
+            # Add audio if available
+            if video_clip.audio is not None:
+                final_clip = final_clip.set_audio(video_clip.audio)
+                
+            # Write final video
+            final_clip.write_videofile(output_path, codec='libx264')
+            
+            # Clean up
+            for clip in batch_clips:
+                clip.close()
+            final_clip.close()
+            
+        yield 100
         return True
     except Exception as e:
-        st.error(f"Video processing error: {e}")
+        st.error(f"Video processing error: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
         return False
+    finally:
+        # Close video clip
+        try:
+            video_clip.close()
+        except:
+            pass
 
 st.title("🎭 AI Face Swap")
 st.subheader("Upload a source face and a target image/video to swap faces")
@@ -166,17 +215,14 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
     if not HAS_DEPENDENCIES:
         st.error("Required dependencies are missing. Cannot perform face swap.")
     else:
-        # Try to import insightface first to check if it's available
-        try:
-            import insightface
-            
-            # Show progress
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            status_text.text("Processing... Please wait")
-            
-            # Create temporary directory for processing
-            with tempfile.TemporaryDirectory() as temp_dir:
+        # Show progress
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        status_text.text("Processing... Please wait")
+        
+        # Create temporary directory for processing
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
                 # Save uploaded files
                 source_path = os.path.join(temp_dir, f"source{os.path.splitext(source_file.name)[1]}")
                 with open(source_path, "wb") as f:
@@ -185,7 +231,8 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
                 target_path = os.path.join(temp_dir, f"target{os.path.splitext(target_file.name)[1]}")
                 with open(target_path, "wb") as f:
                     f.write(target_file.getbuffer())
-                    
+                
+                # Set output path
                 output_path = os.path.join(temp_dir, f"output{os.path.splitext(target_file.name)[1]}")
                 
                 # Progress updates
@@ -198,25 +245,28 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
                     status_text.text("Processing video... This may take several minutes")
                     
                     # Process video frame by frame with progress updates
-                    for progress, frame_idx, total in swap_video_faces(source_path, target_path, output_path):
+                    success = False
+                    for progress in process_video(source_path, target_path, output_path):
                         progress_bar.progress(progress)
-                        status_text.text(f"Processing frame {frame_idx}/{total}...")
+                        status_text.text(f"Video processing: {progress}%")
+                        if progress == 100:
+                            success = True
                     
-                    progress_bar.progress(100)
-                    status_text.text("Processing complete!")
-                    
-                    # Show result
-                    st.subheader("Result")
-                    st.video(output_path)
-                    
-                    # Download button
-                    with open(output_path, "rb") as file:
-                        st.download_button(
-                            label="Download Processed Video",
-                            data=file,
-                            file_name="faceswap_result.mp4",
-                            mime="video/mp4"
-                        )
+                    if success and os.path.exists(output_path):
+                        # Show result
+                        st.subheader("Result")
+                        st.video(output_path)
+                        
+                        # Download button
+                        with open(output_path, "rb") as file:
+                            st.download_button(
+                                label="Download Processed Video",
+                                data=file,
+                                file_name="faceswap_result.mp4",
+                                mime="video/mp4"
+                            )
+                    else:
+                        st.error("Failed to process video. See errors above.")
                 else:
                     status_text.text("Processing image...")
                     
@@ -243,12 +293,10 @@ if st.button("Start Face Swap", disabled=(source_file is None or target_file is 
                     else:
                         progress_bar.progress(100)
                         status_text.text("Processing failed")
-                        
-        except ImportError as e:
-            st.error(f"Missing insightface library: {e}")
-            st.info("Install with: pip install insightface onnxruntime")
-        except Exception as e:
-            st.error(f"Error during processing: {e}")
+            except Exception as e:
+                st.error(f"Processing error: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
 
 # Add footer
 st.markdown("---")

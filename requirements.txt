@@ -9,7 +9,7 @@ pillow>=9.0.0
 
 # AI and ML frameworks
 onnx>=1.14.0
-insightface>=0.7.0
+insightface>=0.7.3  # Specify exact version that has FaceSwap
 tensorflow>=2.12.0
 gfpgan>=1.3.8
 
@@ -24,8 +24,6 @@ opennsfw2>=0.10.0
 onnxruntime>=1.15.0; sys_platform == 'darwin'
 onnxruntime-gpu>=1.15.0; sys_platform != 'darwin'
 
-# UI components if needed (commented out for now)
-# tk>=0.1.0
-# customtkinter>=5.2.0
-# tkinterdnd2>=0.3.0; sys_platform != 'darwin' and platform_machine != 'arm64'
-# tkinterdnd2-universal>=1.7.3; sys_platform == 'darwin' and platform_machine == 'arm64'
+# Additional dependencies
+facexlib>=0.3.0  # Optional dependency for face enhancement
+moviepy>=1.0.3  # Better video handling than OpenCV
