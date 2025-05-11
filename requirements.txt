@@ -1,6 +1,8 @@
 --extra-index-url https://download.pytorch.org/whl/cu118
 
-numpy==1.24.3
+setuptools>=65.5.0
+wheel>=0.38.0
+numpy>=1.26.0  # Updated from 1.24.3 to a Python 3.12 compatible version
 opencv-python==4.8.0.74
 onnx==1.14.0
 insightface==0.7.3
